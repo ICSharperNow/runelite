@@ -36,6 +36,8 @@ import java.io.File;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
+import java.net.Authenticator;
+import java.net.PasswordAuthentication;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -78,6 +80,7 @@ import net.runelite.client.config.ConfigManager;
 import net.runelite.client.discord.DiscordService;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.externalplugins.ExternalPluginManager;
+import net.runelite.client.game.WorldService;
 import net.runelite.client.plugins.PluginManager;
 import net.runelite.client.rs.ClientLoader;
 import net.runelite.client.rs.ClientUpdateCheckMode;
@@ -90,7 +93,10 @@ import net.runelite.client.ui.overlay.tooltip.TooltipOverlay;
 import net.runelite.client.ui.overlay.worldmap.WorldMapOverlay;
 import net.runelite.client.util.OSType;
 import net.runelite.client.util.ReflectUtil;
+import net.runelite.client.util.WorldUtil;
 import net.runelite.http.api.RuneLiteAPI;
+import net.runelite.http.api.worlds.World;
+import net.runelite.http.api.worlds.WorldResult;
 import okhttp3.Cache;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -163,6 +169,13 @@ public class RuneLite
 	@Nullable
 	private TelemetryClient telemetryClient;
 
+	@Inject
+	private WorldService worldService;
+
+	private static Boolean Enable_Auto_Login = false;
+	private static String Username = "";
+	private static String Password = "";
+
 	public static void main(String[] args) throws Exception
 	{
 		Locale.setDefault(Locale.ENGLISH);
@@ -173,30 +186,42 @@ public class RuneLite
 		parser.accepts("safe-mode", "Disables external plugins and the GPU plugin");
 		parser.accepts("insecure-skip-tls-verification", "Disables TLS verification");
 		parser.accepts("jav_config", "jav_config url")
-			.withRequiredArg()
-			.defaultsTo(RuneLiteProperties.getJavConfig());
+				.withRequiredArg()
+				.defaultsTo(RuneLiteProperties.getJavConfig());
 		parser.accepts("disable-telemetry", "Disable telemetry");
 		parser.accepts("profile", "Configuration profile to use").withRequiredArg();
 		parser.accepts("noupdate", "Skips the launcher update");
 
 		final ArgumentAcceptingOptionSpec<File> sessionfile = parser.accepts("sessionfile", "Use a specified session file")
-			.withRequiredArg()
-			.withValuesConvertedBy(new ConfigFileConverter())
-			.defaultsTo(DEFAULT_SESSION_FILE);
+				.withRequiredArg()
+				.withValuesConvertedBy(new ConfigFileConverter())
+				.defaultsTo(DEFAULT_SESSION_FILE);
+
+		final ArgumentAcceptingOptionSpec<String> loginInfo = parser
+				.accepts("login")
+				.withRequiredArg().ofType(String.class);
+
+		final ArgumentAcceptingOptionSpec<String> proxyInfo = parser
+				.accepts("proxy")
+				.withRequiredArg().ofType(String.class);
+
+		final ArgumentAcceptingOptionSpec<Integer> worldInfo = parser
+				.accepts("world")
+				.withRequiredArg().ofType(Integer.class);
 
 		final ArgumentAcceptingOptionSpec<ClientUpdateCheckMode> updateMode = parser
-			.accepts("rs", "Select client type")
-			.withRequiredArg()
-			.ofType(ClientUpdateCheckMode.class)
-			.defaultsTo(ClientUpdateCheckMode.AUTO)
-			.withValuesConvertedBy(new EnumConverter<ClientUpdateCheckMode>(ClientUpdateCheckMode.class)
-			{
-				@Override
-				public ClientUpdateCheckMode convert(String v)
+				.accepts("rs", "Select client type")
+				.withRequiredArg()
+				.ofType(ClientUpdateCheckMode.class)
+				.defaultsTo(ClientUpdateCheckMode.AUTO)
+				.withValuesConvertedBy(new EnumConverter<ClientUpdateCheckMode>(ClientUpdateCheckMode.class)
 				{
-					return super.convert(v.toUpperCase());
-				}
-			});
+					@Override
+					public ClientUpdateCheckMode convert(String v)
+					{
+						return super.convert(v.toUpperCase());
+					}
+				});
 
 		final OptionSpec<Void> insecureWriteCredentials = parser.accepts("insecure-write-credentials", "Dump authentication tokens from the Jagex Launcher to a text file to be used for development");
 
@@ -213,6 +238,59 @@ public class RuneLite
 		{
 			final Logger logger = (Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
 			logger.setLevel(Level.DEBUG);
+		}
+
+		if (options.has("login"))
+		{
+			String[] login = options.valueOf(loginInfo).split(":");
+
+			if (login.length >= 2)
+			{
+				//Enable flag
+				Enable_Auto_Login = true;
+
+				//Set username
+				Username = login[0];
+
+				//Set password
+				Password = login[1];
+			}
+		}
+
+		if (options.has("proxy"))
+		{
+			String[] proxy = options.valueOf(proxyInfo).split(":");
+
+			if (proxy.length >= 2)
+			{
+				System.setProperty("socksProxyHost", proxy[0]);
+				System.setProperty("socksProxyPort", proxy[1]);
+			}
+
+			if (proxy.length >= 4)
+			{
+				System.setProperty("java.net.socks.username", proxy[2]);
+				System.setProperty("java.net.socks.password", proxy[3]);
+
+				final String user = proxy[2];
+				final char[] pass = proxy[3].toCharArray();
+
+				Authenticator.setDefault(new Authenticator()
+				{
+					private final PasswordAuthentication auth = new PasswordAuthentication(user, pass);
+
+					protected PasswordAuthentication getPasswordAuthentication()
+					{
+						return auth;
+					}
+				});
+			}
+		}
+
+		if (options.has("world"))
+		{
+			//int world = options.valueOf(worldInfo);
+			//System.setProperty("cli.world", String.valueOf(world));
 		}
 
 		Thread.setDefaultUncaughtExceptionHandler((thread, throwable) ->
@@ -250,17 +328,17 @@ public class RuneLite
 				if (!assertions)
 				{
 					SwingUtilities.invokeLater(() ->
-						new FatalErrorDialog("Developers should enable assertions; Add `-ea` to your JVM arguments`")
-							.addHelpButtons()
-							.addBuildingGuide()
-							.open());
+							new FatalErrorDialog("Developers should enable assertions; Add `-ea` to your JVM arguments`")
+									.addHelpButtons()
+									.addBuildingGuide()
+									.open());
 					return;
 				}
 			}
 
 			log.info("RuneLite {} (launcher version {}) starting up, args: {}",
-				RuneLiteProperties.getVersion(), MoreObjects.firstNonNull(RuneLiteProperties.getLauncherVersion(), "unknown"),
-				args.length == 0 ? "none" : String.join(" ", args));
+					RuneLiteProperties.getVersion(), MoreObjects.firstNonNull(RuneLiteProperties.getLauncherVersion(), "unknown"),
+					args.length == 0 ? "none" : String.join(" ", args));
 
 			final RuntimeMXBean runtime = ManagementFactory.getRuntimeMXBean();
 			// This includes arguments from _JAVA_OPTIONS, which are parsed after command line flags and applied to
@@ -269,16 +347,16 @@ public class RuneLite
 
 			final long start = System.currentTimeMillis();
 			injector = Guice.createInjector(new RuneLiteModule(
-				okHttpClient,
-				clientLoader,
-				runtimeConfigLoader,
-				developerMode,
-				options.has("safe-mode"),
-				options.has("disable-telemetry"),
-				options.valueOf(sessionfile),
-				(String) options.valueOf("profile"),
-				options.has(insecureWriteCredentials),
-				options.has("noupdate")
+					okHttpClient,
+					clientLoader,
+					runtimeConfigLoader,
+					developerMode,
+					options.has("safe-mode"),
+					options.has("disable-telemetry"),
+					options.valueOf(sessionfile),
+					(String) options.valueOf("profile"),
+					options.has(insecureWriteCredentials),
+					options.has("noupdate")
 			));
 
 			injector.getInstance(RuneLite.class).start();
@@ -291,9 +369,9 @@ public class RuneLite
 		{
 			log.error("Failure during startup", e);
 			SwingUtilities.invokeLater(() ->
-				new FatalErrorDialog("RuneLite has encountered an unexpected error during startup.")
-					.addHelpButtons()
-					.open());
+					new FatalErrorDialog("RuneLite has encountered an unexpected error during startup.")
+							.addHelpButtons()
+							.open());
 		}
 		finally
 		{
@@ -382,6 +460,27 @@ public class RuneLite
 			WidgetOverlay.createOverlays(overlayManager, client).forEach(overlayManager::add);
 			overlayManager.add(worldMapOverlay.get());
 			overlayManager.add(tooltipOverlay.get());
+
+			//Set the world if specified via CLI args - will not work until clientUI.init is called
+			//Optional<Integer> worldArg = Optional.ofNullable(System.getProperty("cli.world")).map(Integer::parseInt);
+			//worldArg.ifPresent(this::setWorld);
+		}
+
+		//Modify config to auto login with passed in parameters
+		if (Enable_Auto_Login == true)
+		{
+			//Set username
+			configManager.setConfiguration("OneOhOneAutoLogin", "username", RuneLite.Username);
+			System.out.println("Automatic Login Username: " + RuneLite.Username);
+
+			//Set password
+			configManager.setConfiguration("OneOhOneAutoLogin", "password", RuneLite.Password);
+
+			//Enable UnethicalAutoLoginPlugin
+			configManager.setConfiguration("runelite", "_101autologinplugin", true);
+
+			//Reset flag
+			Enable_Auto_Login = false;
 		}
 
 		// Start plugins
@@ -401,6 +500,44 @@ public class RuneLite
 		ReflectUtil.invalidateAnnotationCaches();
 	}
 
+	private void setWorld(int cliWorld)
+	{
+		int correctedWorld = cliWorld < 300 ? cliWorld + 300 : cliWorld;
+
+		if (correctedWorld <= 300 || client.getWorld() == correctedWorld)
+		{
+			return;
+		}
+
+		final WorldResult worldResult = worldService.getWorlds();
+
+		if (worldResult == null)
+		{
+			log.warn("Failed to lookup worlds.");
+			return;
+		}
+
+		final World world = worldResult.findWorld(correctedWorld);
+
+		if (world != null)
+		{
+			final net.runelite.api.World rsWorld = client.createWorld();
+			rsWorld.setActivity(world.getActivity());
+			rsWorld.setAddress(world.getAddress());
+			rsWorld.setId(world.getId());
+			rsWorld.setPlayerCount(world.getPlayers());
+			rsWorld.setLocation(world.getLocation());
+			rsWorld.setTypes(WorldUtil.toWorldTypes(world.getTypes()));
+
+			client.changeWorld(rsWorld);
+			log.debug("Applied new world {}", correctedWorld);
+		}
+		else
+		{
+			log.warn("World {} not found.", correctedWorld);
+		}
+	}
+
 	@VisibleForTesting
 	public static void setInjector(Injector injector)
 	{
@@ -415,8 +552,8 @@ public class RuneLite
 			final File file;
 
 			if (Paths.get(fileName).isAbsolute()
-				|| fileName.startsWith("./")
-				|| fileName.startsWith(".\\"))
+					|| fileName.startsWith("./")
+					|| fileName.startsWith(".\\"))
 			{
 				file = new File(fileName);
 			}
@@ -450,36 +587,36 @@ public class RuneLite
 	static OkHttpClient buildHttpClient(boolean insecureSkipTlsVerification)
 	{
 		OkHttpClient.Builder builder = new OkHttpClient.Builder()
-			.pingInterval(30, TimeUnit.SECONDS)
-			.addInterceptor(chain ->
-			{
-				Request request = chain.request();
-				if (request.header("User-Agent") != null)
+				.pingInterval(30, TimeUnit.SECONDS)
+				.addInterceptor(chain ->
 				{
-					return chain.proceed(request);
-				}
+					Request request = chain.request();
+					if (request.header("User-Agent") != null)
+					{
+						return chain.proceed(request);
+					}
 
-				Request userAgentRequest = request
-					.newBuilder()
-					.header("User-Agent", USER_AGENT)
-					.build();
-				return chain.proceed(userAgentRequest);
-			})
-			// Setup cache
-			.cache(new Cache(new File(CACHE_DIR, "okhttp"), MAX_OKHTTP_CACHE_SIZE))
-			.addNetworkInterceptor(chain ->
-			{
-				// This has to be a network interceptor so it gets hit before the cache tries to store stuff
-				Response res = chain.proceed(chain.request());
-				if (res.code() >= 400 && "GET".equals(res.request().method()))
+					Request userAgentRequest = request
+							.newBuilder()
+							.header("User-Agent", USER_AGENT)
+							.build();
+					return chain.proceed(userAgentRequest);
+				})
+				// Setup cache
+				.cache(new Cache(new File(CACHE_DIR, "okhttp"), MAX_OKHTTP_CACHE_SIZE))
+				.addNetworkInterceptor(chain ->
 				{
-					// if the request 404'd we don't want to cache it because its probably temporary
-					res = res.newBuilder()
-						.header("Cache-Control", "no-store")
-						.build();
-				}
-				return res;
-			});
+					// This has to be a network interceptor so it gets hit before the cache tries to store stuff
+					Response res = chain.proceed(chain.request());
+					if (res.code() >= 400 && "GET".equals(res.request().method()))
+					{
+						// if the request 404'd we don't want to cache it because its probably temporary
+						res = res.newBuilder()
+								.header("Cache-Control", "no-store")
+								.build();
+					}
+					return res;
+				});
 
 		try
 		{
