@@ -186,16 +186,16 @@ public class RuneLite
 		parser.accepts("safe-mode", "Disables external plugins and the GPU plugin");
 		parser.accepts("insecure-skip-tls-verification", "Disables TLS verification");
 		parser.accepts("jav_config", "jav_config url")
-				.withRequiredArg()
-				.defaultsTo(RuneLiteProperties.getJavConfig());
+			.withRequiredArg()
+			.defaultsTo(RuneLiteProperties.getJavConfig());
 		parser.accepts("disable-telemetry", "Disable telemetry");
 		parser.accepts("profile", "Configuration profile to use").withRequiredArg();
 		parser.accepts("noupdate", "Skips the launcher update");
 
 		final ArgumentAcceptingOptionSpec<File> sessionfile = parser.accepts("sessionfile", "Use a specified session file")
-				.withRequiredArg()
-				.withValuesConvertedBy(new ConfigFileConverter())
-				.defaultsTo(DEFAULT_SESSION_FILE);
+			.withRequiredArg()
+			.withValuesConvertedBy(new ConfigFileConverter())
+			.defaultsTo(DEFAULT_SESSION_FILE);
 
 		final ArgumentAcceptingOptionSpec<String> loginInfo = parser
 				.accepts("login")
@@ -210,18 +210,18 @@ public class RuneLite
 				.withRequiredArg().ofType(Integer.class);
 
 		final ArgumentAcceptingOptionSpec<ClientUpdateCheckMode> updateMode = parser
-				.accepts("rs", "Select client type")
-				.withRequiredArg()
-				.ofType(ClientUpdateCheckMode.class)
-				.defaultsTo(ClientUpdateCheckMode.AUTO)
-				.withValuesConvertedBy(new EnumConverter<ClientUpdateCheckMode>(ClientUpdateCheckMode.class)
+			.accepts("rs", "Select client type")
+			.withRequiredArg()
+			.ofType(ClientUpdateCheckMode.class)
+			.defaultsTo(ClientUpdateCheckMode.AUTO)
+			.withValuesConvertedBy(new EnumConverter<ClientUpdateCheckMode>(ClientUpdateCheckMode.class)
+			{
+				@Override
+				public ClientUpdateCheckMode convert(String v)
 				{
-					@Override
-					public ClientUpdateCheckMode convert(String v)
-					{
-						return super.convert(v.toUpperCase());
-					}
-				});
+					return super.convert(v.toUpperCase());
+				}
+			});
 
 		final OptionSpec<Void> insecureWriteCredentials = parser.accepts("insecure-write-credentials", "Dump authentication tokens from the Jagex Launcher to a text file to be used for development");
 
@@ -328,17 +328,17 @@ public class RuneLite
 				if (!assertions)
 				{
 					SwingUtilities.invokeLater(() ->
-							new FatalErrorDialog("Developers should enable assertions; Add `-ea` to your JVM arguments`")
-									.addHelpButtons()
-									.addBuildingGuide()
-									.open());
+						new FatalErrorDialog("Developers should enable assertions; Add `-ea` to your JVM arguments`")
+							.addHelpButtons()
+							.addBuildingGuide()
+							.open());
 					return;
 				}
 			}
 
 			log.info("RuneLite {} (launcher version {}) starting up, args: {}",
-					RuneLiteProperties.getVersion(), MoreObjects.firstNonNull(RuneLiteProperties.getLauncherVersion(), "unknown"),
-					args.length == 0 ? "none" : String.join(" ", args));
+				RuneLiteProperties.getVersion(), MoreObjects.firstNonNull(RuneLiteProperties.getLauncherVersion(), "unknown"),
+				args.length == 0 ? "none" : String.join(" ", args));
 
 			final RuntimeMXBean runtime = ManagementFactory.getRuntimeMXBean();
 			// This includes arguments from _JAVA_OPTIONS, which are parsed after command line flags and applied to
@@ -347,16 +347,16 @@ public class RuneLite
 
 			final long start = System.currentTimeMillis();
 			injector = Guice.createInjector(new RuneLiteModule(
-					okHttpClient,
-					clientLoader,
-					runtimeConfigLoader,
-					developerMode,
-					options.has("safe-mode"),
-					options.has("disable-telemetry"),
-					options.valueOf(sessionfile),
-					(String) options.valueOf("profile"),
-					options.has(insecureWriteCredentials),
-					options.has("noupdate")
+				okHttpClient,
+				clientLoader,
+				runtimeConfigLoader,
+				developerMode,
+				options.has("safe-mode"),
+				options.has("disable-telemetry"),
+				options.valueOf(sessionfile),
+				(String) options.valueOf("profile"),
+				options.has(insecureWriteCredentials),
+				options.has("noupdate")
 			));
 
 			injector.getInstance(RuneLite.class).start();
@@ -369,9 +369,9 @@ public class RuneLite
 		{
 			log.error("Failure during startup", e);
 			SwingUtilities.invokeLater(() ->
-					new FatalErrorDialog("RuneLite has encountered an unexpected error during startup.")
-							.addHelpButtons()
-							.open());
+				new FatalErrorDialog("RuneLite has encountered an unexpected error during startup.")
+					.addHelpButtons()
+					.open());
 		}
 		finally
 		{
@@ -552,8 +552,8 @@ public class RuneLite
 			final File file;
 
 			if (Paths.get(fileName).isAbsolute()
-					|| fileName.startsWith("./")
-					|| fileName.startsWith(".\\"))
+				|| fileName.startsWith("./")
+				|| fileName.startsWith(".\\"))
 			{
 				file = new File(fileName);
 			}
@@ -587,36 +587,36 @@ public class RuneLite
 	static OkHttpClient buildHttpClient(boolean insecureSkipTlsVerification)
 	{
 		OkHttpClient.Builder builder = new OkHttpClient.Builder()
-				.pingInterval(30, TimeUnit.SECONDS)
-				.addInterceptor(chain ->
+			.pingInterval(30, TimeUnit.SECONDS)
+			.addInterceptor(chain ->
+			{
+				Request request = chain.request();
+				if (request.header("User-Agent") != null)
 				{
-					Request request = chain.request();
-					if (request.header("User-Agent") != null)
-					{
-						return chain.proceed(request);
-					}
+					return chain.proceed(request);
+				}
 
-					Request userAgentRequest = request
-							.newBuilder()
-							.header("User-Agent", USER_AGENT)
-							.build();
-					return chain.proceed(userAgentRequest);
-				})
-				// Setup cache
-				.cache(new Cache(new File(CACHE_DIR, "okhttp"), MAX_OKHTTP_CACHE_SIZE))
-				.addNetworkInterceptor(chain ->
+				Request userAgentRequest = request
+					.newBuilder()
+					.header("User-Agent", USER_AGENT)
+					.build();
+				return chain.proceed(userAgentRequest);
+			})
+			// Setup cache
+			.cache(new Cache(new File(CACHE_DIR, "okhttp"), MAX_OKHTTP_CACHE_SIZE))
+			.addNetworkInterceptor(chain ->
+			{
+				// This has to be a network interceptor so it gets hit before the cache tries to store stuff
+				Response res = chain.proceed(chain.request());
+				if (res.code() >= 400 && "GET".equals(res.request().method()))
 				{
-					// This has to be a network interceptor so it gets hit before the cache tries to store stuff
-					Response res = chain.proceed(chain.request());
-					if (res.code() >= 400 && "GET".equals(res.request().method()))
-					{
-						// if the request 404'd we don't want to cache it because its probably temporary
-						res = res.newBuilder()
-								.header("Cache-Control", "no-store")
-								.build();
-					}
-					return res;
-				});
+					// if the request 404'd we don't want to cache it because its probably temporary
+					res = res.newBuilder()
+						.header("Cache-Control", "no-store")
+						.build();
+				}
+				return res;
+			});
 
 		try
 		{
