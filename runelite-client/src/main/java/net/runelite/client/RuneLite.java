@@ -175,7 +175,7 @@ public class RuneLite
 	private static Boolean Enable_Auto_Login = false;
 	private static String Username = "";
 	private static String Password = "";
-
+	//
 	public static void main(String[] args) throws Exception
 	{
 		Locale.setDefault(Locale.ENGLISH);
