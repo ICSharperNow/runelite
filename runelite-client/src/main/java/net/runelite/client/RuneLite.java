@@ -49,11 +49,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import javax.annotation.Nullable;
@@ -289,8 +285,8 @@ public class RuneLite
 
 		if (options.has("world"))
 		{
-			//int world = options.valueOf(worldInfo);
-			//System.setProperty("cli.world", String.valueOf(world));
+			int world = options.valueOf(worldInfo);
+			System.setProperty("cli.world", String.valueOf(world));
 		}
 
 		Thread.setDefaultUncaughtExceptionHandler((thread, throwable) ->
@@ -462,8 +458,8 @@ public class RuneLite
 			overlayManager.add(tooltipOverlay.get());
 
 			//Set the world if specified via CLI args - will not work until clientUI.init is called
-			//Optional<Integer> worldArg = Optional.ofNullable(System.getProperty("cli.world")).map(Integer::parseInt);
-			//worldArg.ifPresent(this::setWorld);
+			Optional<Integer> worldArg = Optional.ofNullable(System.getProperty("cli.world")).map(Integer::parseInt);
+			worldArg.ifPresent(this::setWorld);
 		}
 
 		//Modify config to auto login with passed in parameters
