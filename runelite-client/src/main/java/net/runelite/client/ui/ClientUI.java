@@ -215,7 +215,7 @@ public class ClientUI
 		this.eventBus = eventBus;
 		this.safeMode = safeMode;
 		this.title = RuneLiteProperties.getTitle() + (safeMode ? " (safe mode)" : "");
-
+//
 		normalBoundsTimer = new Timer(250, _ev -> setLastNormalBounds());
 		normalBoundsTimer.setRepeats(false);
 	}
