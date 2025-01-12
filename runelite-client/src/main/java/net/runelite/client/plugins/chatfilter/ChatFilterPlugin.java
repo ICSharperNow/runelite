@@ -49,7 +49,6 @@ import static net.runelite.api.ChatMessageType.GAMEMESSAGE;
 import static net.runelite.api.ChatMessageType.ITEM_EXAMINE;
 import static net.runelite.api.ChatMessageType.MODCHAT;
 import static net.runelite.api.ChatMessageType.NPC_EXAMINE;
-import static net.runelite.api.ChatMessageType.NPC_SAY;
 import static net.runelite.api.ChatMessageType.OBJECT_EXAMINE;
 import static net.runelite.api.ChatMessageType.PUBLICCHAT;
 import static net.runelite.api.ChatMessageType.SPAM;
@@ -93,8 +92,7 @@ public class ChatFilterPlugin extends Plugin
 		OBJECT_EXAMINE,
 		SPAM,
 		PUBLICCHAT,
-		MODCHAT,
-		NPC_SAY
+		MODCHAT
 	);
 
 	private static final CharMatcher jagexPrintableCharMatcher = Text.JAGEX_PRINTABLE_CHAR_MATCHER;
@@ -226,7 +224,6 @@ public class ChatFilterPlugin extends Plugin
 			case CLAN_MESSAGE:
 			case CLAN_GUEST_MESSAGE:
 			case CLAN_GIM_MESSAGE:
-			case NPC_SAY:
 				if (config.filterGameChat())
 				{
 					message = censorMessage(messageNode, null, message);
