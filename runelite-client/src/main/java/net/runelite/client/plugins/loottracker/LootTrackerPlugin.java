@@ -64,8 +64,11 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.Actor;
+import net.runelite.api.AnimationID;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
+import net.runelite.api.Constants;
 import net.runelite.api.GameState;
 import net.runelite.api.InventoryID;
 import net.runelite.api.ItemComposition;
@@ -83,6 +86,7 @@ import net.runelite.api.Tile;
 import net.runelite.api.Varbits;
 import net.runelite.api.WorldType;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.events.AnimationChanged;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.ItemContainerChanged;
@@ -135,11 +139,13 @@ public class LootTrackerPlugin extends Plugin
 {
 	private static final int MAX_DROPS = 1024;
 	private static final Duration MAX_AGE = Duration.ofDays(365L);
+	private static final int INVCHANGE_TIMEOUT = 10; // server ticks
 
 	// Activity/Event loot handling
 	private static final Pattern CLUE_SCROLL_PATTERN = Pattern.compile("You have completed [0-9]+ ([a-z]+) Treasure Trails?\\.");
 	private static final int THEATRE_OF_BLOOD_REGION = 12867;
 	private static final int THEATRE_OF_BLOOD_LOBBY = 14642;
+	private static final int ARAXXOR_LAIR = 14489;
 
 	// Herbiboar loot handling
 	@VisibleForTesting
@@ -166,6 +172,7 @@ public class LootTrackerPlugin extends Plugin
 	private static final String ANCIENT_CHEST_LOOTED_MESSAGE = "You open the chest and find";
 	private static final Pattern HAM_CHEST_LOOTED_PATTERN = Pattern.compile("Your (?<key>[a-z]+) key breaks in the lock.*");
 	private static final int HAM_STOREROOM_REGION = 10321;
+	private static final int LAVA_MAZE_NORTH_EAST_REGION = 12348;
 	private static final Map<Integer, String> CHEST_EVENT_TYPES = new ImmutableMap.Builder<Integer, String>().
 		put(5179, "Brimstone Chest").
 		put(11573, "Crystal Chest").
@@ -181,7 +188,9 @@ public class LootTrackerPlugin extends Plugin
 		put(7827, "Dark Chest").
 		put(13117, "Rogues' Chest").
 		put(13156, "Chest (Ancient Vault)").
-		put(12348, "Muddy Chest").
+		put(LAVA_MAZE_NORTH_EAST_REGION, "Muddy Chest").
+		put(5422, "Chest (Aldarin Villas)").
+		put(6550, "Chest (Moon key)").
 		build();
 
 	// Chests opened with keys from slayer tasks
@@ -265,6 +274,9 @@ public class LootTrackerPlugin extends Plugin
 	private static final String ORE_PACK_VM_EVENT = "Ore Pack (Volcanic Mine)";
 
 	private static final String WINTERTODT_SUPPLY_CRATE_EVENT = "Supply crate (Wintertodt)";
+	private static final String WINTERTODT_REWARD_CART_EVENT = "Reward cart (Wintertodt)";
+	private static final String WINTERTODT_LOOT_STRING = "You found some loot: ";
+	private static final int WINTERTODT_REGION = 6461;
 
 	private static final String BAG_FULL_OF_GEMS_PERCY_EVENT = "Bag full of gems (Percy)";
 	private static final String BAG_FULL_OF_GEMS_BELONA_EVENT = "Bag full of gems (Belona)";
@@ -371,6 +383,7 @@ public class LootTrackerPlugin extends Plugin
 	private InventoryID inventoryId;
 	private Multiset<Integer> inventorySnapshot;
 	private InvChangeCallback inventorySnapshotCb;
+	private int inventoryTimeout;
 
 	private String groundSnapshotName;
 	private int groundSnapshotCombatLevel;
@@ -563,6 +576,10 @@ public class LootTrackerPlugin extends Plugin
 				ignoredEvents = Text.fromCSV(config.getIgnoredEvents());
 				SwingUtilities.invokeLater(panel::updateIgnoredRecords);
 			}
+			else if ("priceType".equals(event.getKey()) || "showPriceType".equals(event.getKey()))
+			{
+				SwingUtilities.invokeLater(panel::updatePriceTypeDisplay);
+			}
 		}
 	}
 
@@ -705,6 +722,15 @@ public class LootTrackerPlugin extends Plugin
 	@Subscribe
 	public void onPostClientTick(PostClientTick postClientTick)
 	{
+		if (inventoryTimeout > 0)
+		{
+			if (--inventoryTimeout == 0)
+			{
+				log.debug("Inventory snapshot: Loot timeout");
+				resetEvent();
+			}
+		}
+
 		if (groundSnapshotCycleDelay > 0)
 		{
 			groundSnapshotCycleDelay--;
@@ -992,6 +1018,13 @@ public class LootTrackerPlugin extends Plugin
 				return;
 			}
 
+			if (regionID == LAVA_MAZE_NORTH_EAST_REGION) // Muddy Chest crowdsourcing needs F2P/P2P world
+			{
+				onInvChange(collectInvAndGroundItems(LootRecordType.EVENT, CHEST_EVENT_TYPES.get(regionID),
+					client.getWorld()));
+				return;
+			}
+
 			if (SLAYER_CHEST_EVENT_TYPES.contains(CHEST_EVENT_TYPES.get(regionID)))
 			{
 				onInvChange(collectInvAndGroundItems(LootRecordType.EVENT, CHEST_EVENT_TYPES.get(regionID),
@@ -1124,6 +1157,12 @@ public class LootTrackerPlugin extends Plugin
 			return;
 		}
 
+		if (regionID == WINTERTODT_REGION && message.startsWith(WINTERTODT_LOOT_STRING))
+		{
+			onInvChange(collectInvItems(LootRecordType.EVENT, WINTERTODT_REWARD_CART_EVENT, client.getBoostedSkillLevel(Skill.FIREMAKING)));
+			return;
+		}
+
 		if (message.equals(IMPLING_CATCH_MESSAGE))
 		{
 			onInvChange(collectInvItems(LootRecordType.EVENT, client.getLocalPlayer().getInteracting().getName()));
@@ -1174,9 +1213,7 @@ public class LootTrackerPlugin extends Plugin
 			inventorySnapshotCb.accept(items, groundItems, diffr);
 		}
 
-		inventoryId = null;
-		inventorySnapshot = null;
-		inventorySnapshotCb = null;
+		resetEvent();
 	}
 
 	@Subscribe
@@ -1243,6 +1280,9 @@ public class LootTrackerPlugin extends Plugin
 					case ItemID.BOUNTY_CRATE_TIER_7:
 					case ItemID.BOUNTY_CRATE_TIER_8:
 					case ItemID.BOUNTY_CRATE_TIER_9:
+					case ItemID.APPRENTICE_POTION_PACK:
+					case ItemID.ADEPT_POTION_PACK:
+					case ItemID.EXPERT_POTION_PACK:
 						onInvChange(collectInvAndGroundItems(LootRecordType.EVENT, itemManager.getItemComposition(event.getItemId()).getName()));
 						break;
 					case ItemID.SUPPLY_CRATE_24884:
@@ -1262,13 +1302,18 @@ public class LootTrackerPlugin extends Plugin
 					case ItemID.HUNTERS_LOOT_SACK_EXPERT:
 					case ItemID.HUNTERS_LOOT_SACK_MASTER:
 						final int itemId = event.getItemId();
+						final Map<String, Integer> levels = new ImmutableMap.Builder<String, Integer>().
+							put("WOODCUTTING", client.getBoostedSkillLevel(Skill.WOODCUTTING)).
+							put("HERBLORE", client.getBoostedSkillLevel(Skill.HERBLORE)).
+							put("HUNTER", client.getBoostedSkillLevel(Skill.HUNTER)).
+							build();
 						onInvChange((((invItems, groundItems, removedItems) ->
 						{
 							int cnt = removedItems.count(itemId);
 							if (cnt > 0)
 							{
 								String name = itemManager.getItemComposition(itemId).getMembersName();
-								addLoot(name, -1, LootRecordType.EVENT, null, invItems, cnt);
+								addLoot(name, -1, LootRecordType.EVENT, levels, invItems, cnt);
 							}
 						})));
 						break;
@@ -1287,6 +1332,17 @@ public class LootTrackerPlugin extends Plugin
 					}
 				}));
 			}
+		}
+	}
+
+	@Subscribe
+	public void onAnimationChanged(AnimationChanged animationChanged)
+	{
+		Actor actor = animationChanged.getActor();
+		if (actor == client.getLocalPlayer() && actor.getAnimation() == AnimationID.FARMING_HARVEST_HERB && inAraxxorRegion())
+		{
+			log.debug("Harvest Araxxor");
+			onInvChange(InventoryID.INVENTORY, collectInvAndGroundItems(LootRecordType.NPC, "Araxxor"), 4);
 		}
 	}
 
@@ -1370,6 +1426,7 @@ public class LootTrackerPlugin extends Plugin
 		inventoryId = null;
 		inventorySnapshot = null;
 		inventorySnapshotCb = null;
+		inventoryTimeout = 0;
 	}
 
 	@FunctionalInterface
@@ -1412,9 +1469,15 @@ public class LootTrackerPlugin extends Plugin
 
 	private void onInvChange(InventoryID inv, InvChangeCallback cb)
 	{
+		onInvChange(inv, cb, INVCHANGE_TIMEOUT);
+	}
+
+	private void onInvChange(InventoryID inv, InvChangeCallback cb, int timeout)
+	{
 		inventoryId = inv;
 		inventorySnapshot = HashMultiset.create();
 		inventorySnapshotCb = cb;
+		inventoryTimeout = timeout * Constants.GAME_TICK_LENGTH / Constants.CLIENT_TICK_LENGTH;
 
 		final ItemContainer itemContainer = client.getItemContainer(inv);
 		if (itemContainer != null)
@@ -1458,6 +1521,12 @@ public class LootTrackerPlugin extends Plugin
 	{
 		int region = WorldPoint.fromLocalInstance(client, client.getLocalPlayer().getLocalLocation()).getRegionID();
 		return region == THEATRE_OF_BLOOD_REGION || region == THEATRE_OF_BLOOD_LOBBY;
+	}
+
+	private boolean inAraxxorRegion()
+	{
+		int region = WorldPoint.fromLocalInstance(client, client.getLocalPlayer().getLocalLocation()).getRegionID();
+		return region == ARAXXOR_LAIR;
 	}
 
 	void toggleItem(String name, boolean ignore)
