@@ -39,16 +39,13 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
-import net.runelite.api.ItemID;
-import static net.runelite.api.ItemID.AGILITY_ARENA_TICKET;
+import net.runelite.api.Experience;
 import net.runelite.api.NPC;
-import net.runelite.api.NullNpcID;
 import net.runelite.api.Player;
 import static net.runelite.api.Skill.AGILITY;
 import net.runelite.api.Tile;
 import net.runelite.api.TileItem;
 import net.runelite.api.TileObject;
-import net.runelite.api.Varbits;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.DecorativeObjectDespawned;
 import net.runelite.api.events.DecorativeObjectSpawned;
@@ -66,6 +63,9 @@ import net.runelite.api.events.StatChanged;
 import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.events.WallObjectDespawned;
 import net.runelite.api.events.WallObjectSpawned;
+import net.runelite.api.gameval.ItemID;
+import net.runelite.api.gameval.NpcID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.Notifier;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -91,8 +91,8 @@ public class AgilityPlugin extends Plugin
 {
 	private static final int AGILITY_ARENA_REGION_ID = 11157;
 	private static final Set<Integer> SEPULCHRE_NPCS = ImmutableSet.of(
-		NullNpcID.NULL_9672, NullNpcID.NULL_9673, NullNpcID.NULL_9674,  // arrows
-		NullNpcID.NULL_9669, NullNpcID.NULL_9670, NullNpcID.NULL_9671   // swords
+		NpcID.HALLOWED_PROJECTILE_NPC, NpcID.HALLOWED_PROJECTILE_NPC_T2, NpcID.HALLOWED_PROJECTILE_NPC_T3,  // arrows
+		NpcID.HALLOWED_SWORD_NPC, NpcID.HALLOWED_SWORD_NPC_T2, NpcID.HALLOWED_SWORD_NPC_T3   // swords
 	);
 
 	@Getter
@@ -210,11 +210,11 @@ public class AgilityPlugin extends Plugin
 	@Subscribe
 	public void onVarbitChanged(VarbitChanged event)
 	{
-		if (event.getVarbitId() == Varbits.COLOSSAL_WYRM_COURSE_ADVANCED && event.getValue() == 6)
+		if (event.getVarbitId() == VarbitID.VARLAMORE_WYRM_AGILITY_ADVANCED_PROGRESS && event.getValue() == 6)
 		{
 			trackSession(Courses.COLOSSAL_WYRM_ADVANCED);
 		}
-		else if (event.getVarbitId() == Varbits.COLOSSAL_WYRM_COURSE_BASIC && event.getValue() == 6)
+		else if (event.getVarbitId() == VarbitID.VARLAMORE_WYRM_AGILITY_BASIC_PROGRESS && event.getValue() == 6)
 		{
 			trackSession(Courses.COLOSSAL_WYRM_BASIC);
 		}
@@ -230,6 +230,8 @@ public class AgilityPlugin extends Plugin
 
 		agilityLevel = statChanged.getBoostedLevel();
 
+		// Store previous agility level for possible goal laps recalculation
+		final int previousLevel = Experience.getLevelForXp(lastAgilityXp);
 		// Determine how much EXP was actually gained
 		int agilityXp = statChanged.getXp();
 		int skillGained = agilityXp - lastAgilityXp;
@@ -239,10 +241,16 @@ public class AgilityPlugin extends Plugin
 
 		// Get course
 		Courses course = Courses.getCourse(client.getLocalPlayer().getWorldLocation().getRegionID());
-		if (course == null
-			|| !config.showLapCount()
-			|| Arrays.stream(course.getCourseEndWorldPoints()).noneMatch(wp -> wp.equals(client.getLocalPlayer().getWorldLocation())))
+		if (course == null || !config.showLapCount())
 		{
+			return;
+		}
+		else if (Arrays.stream(course.getCourseEndWorldPoints()).noneMatch(wp -> wp.equals(client.getLocalPlayer().getWorldLocation())))
+		{
+			if (session != null && previousLevel != statChanged.getLevel())
+			{
+				session.recalculateLapsTillGoal(client, xpTrackerService);
+			}
 			return;
 		}
 
@@ -260,12 +268,12 @@ public class AgilityPlugin extends Plugin
 		final TileItem item = itemSpawned.getItem();
 		final Tile tile = itemSpawned.getTile();
 
-		if (item.getId() == ItemID.MARK_OF_GRACE)
+		if (item.getId() == ItemID.GRACE)
 		{
 			marksOfGrace.add(tile);
 		}
 
-		if (item.getId() == ItemID.STICK)
+		if (item.getId() == ItemID.WAA_STICK)
 		{
 			stickTile = tile;
 		}
@@ -279,7 +287,7 @@ public class AgilityPlugin extends Plugin
 
 		marksOfGrace.remove(tile);
 
-		if (item.getId() == ItemID.STICK && stickTile == tile)
+		if (item.getId() == ItemID.WAA_STICK && stickTile == tile)
 		{
 			stickTile = null;
 		}
@@ -292,11 +300,15 @@ public class AgilityPlugin extends Plugin
 		{
 			// Hint arrow has no plane, and always returns the current plane
 			WorldPoint newTicketPosition = client.getHintArrowPoint();
+			if (newTicketPosition == null)
+			{
+				return;
+			}
 			WorldPoint oldTickPosition = lastArenaTicketPosition;
 
 			lastArenaTicketPosition = newTicketPosition;
 
-			if (oldTickPosition != null && newTicketPosition != null
+			if (oldTickPosition != null
 				&& (oldTickPosition.getX() != newTicketPosition.getX() || oldTickPosition.getY() != newTicketPosition.getY()))
 			{
 				log.debug("Ticked position moved from {} to {}", oldTickPosition, newTicketPosition);
@@ -342,7 +354,7 @@ public class AgilityPlugin extends Plugin
 	private void showNewAgilityArenaTimer()
 	{
 		removeAgilityArenaTimer();
-		infoBoxManager.addInfoBox(new AgilityArenaTimer(this, itemManager.getImage(AGILITY_ARENA_TICKET)));
+		infoBoxManager.addInfoBox(new AgilityArenaTimer(this, itemManager.getImage(ItemID.AGILITYARENA_TICKET)));
 	}
 
 	@Subscribe

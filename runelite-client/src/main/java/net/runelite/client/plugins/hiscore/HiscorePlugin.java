@@ -26,6 +26,8 @@ package net.runelite.client.plugins.hiscore;
 
 import com.google.inject.Provides;
 import java.awt.image.BufferedImage;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.inject.Inject;
@@ -36,14 +38,15 @@ import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.IconID;
 import net.runelite.api.MenuAction;
+import net.runelite.api.MenuEntry;
 import net.runelite.api.Player;
-import net.runelite.api.Varbits;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.MenuEntryAdded;
+import net.runelite.api.events.MenuOpened;
 import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.VarbitChanged;
-import net.runelite.api.widgets.ComponentID;
-import net.runelite.api.widgets.InterfaceID;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.WidgetUtil;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -66,6 +69,10 @@ public class HiscorePlugin extends Plugin
 {
 	private static final String LOOKUP = "Lookup";
 	private static final Pattern BOUNTY_PATTERN = Pattern.compile("You have been assigned a new target: <col=[0-9a-f]+>(.*)</col>");
+
+	// A short-lived cache of player indexes to names to allow lookup of players who have despawned prior to a lookup
+	// being executed via a "Lookup" menu option click.
+	private final Map<Integer, String> playerIndexName = new HashMap<>();
 
 	@Inject
 	private Client client;
@@ -118,6 +125,7 @@ public class HiscorePlugin extends Plugin
 	{
 		hiscorePanel.shutdown();
 		clientToolbar.removeNavigation(navButton);
+		playerIndexName.clear();
 
 		menuManager.get().removePlayerMenuItem(LOOKUP);
 	}
@@ -137,6 +145,27 @@ public class HiscorePlugin extends Plugin
 	}
 
 	@Subscribe
+	private void onMenuOpened(MenuOpened event)
+	{
+		playerIndexName.clear();
+		for (MenuEntry entry : event.getMenuEntries())
+		{
+			if (entry.getType() != MenuAction.RUNELITE_PLAYER || !entry.getOption().equals(LOOKUP))
+			{
+				continue;
+			}
+
+			final Player player = entry.getPlayer();
+			if (player == null)
+			{
+				continue;
+			}
+
+			playerIndexName.put(entry.getIdentifier(), player.getName());
+		}
+	}
+
+	@Subscribe
 	public void onMenuEntryAdded(MenuEntryAdded event)
 	{
 		if ((event.getType() != MenuAction.CC_OP.getId() && event.getType() != MenuAction.CC_OP_LOW_PRIORITY.getId()) || !config.menuOption())
@@ -148,13 +177,13 @@ public class HiscorePlugin extends Plugin
 		final int componentId = event.getActionParam1();
 		final int groupId = WidgetUtil.componentToInterface(componentId);
 
-		if (groupId == InterfaceID.FRIEND_LIST && option.equals("Delete")
-			|| groupId == InterfaceID.FRIENDS_CHAT && (option.equals("Add ignore") || option.equals("Remove friend"))
+		if (groupId == InterfaceID.FRIENDS && option.equals("Delete")
+			|| groupId == InterfaceID.CHATCHANNEL_CURRENT && (option.equals("Add ignore") || option.equals("Remove friend"))
 			|| groupId == InterfaceID.CHATBOX && (option.equals("Add ignore") || option.equals("Message"))
-			|| groupId == InterfaceID.IGNORE_LIST && option.equals("Delete")
-			|| (componentId == ComponentID.CLAN_MEMBERS || componentId == ComponentID.CLAN_GUEST_MEMBERS) && (option.equals("Add ignore") || option.equals("Remove friend"))
-			|| groupId == InterfaceID.PRIVATE_CHAT && (option.equals("Add ignore") || option.equals("Message"))
-			|| groupId == InterfaceID.GROUP_IRON && (option.equals("Add friend") || option.equals("Remove friend") || option.equals("Remove ignore"))
+			|| groupId == InterfaceID.IGNORE && option.equals("Delete")
+			|| (componentId == InterfaceID.ClansSidepanel.PLAYERLIST || componentId == InterfaceID.ClansGuestSidepanel.PLAYERLIST) && (option.equals("Add ignore") || option.equals("Remove friend"))
+			|| groupId == InterfaceID.PM_CHAT && (option.equals("Add ignore") || option.equals("Message"))
+			|| groupId == InterfaceID.GIM_SIDEPANEL && (option.equals("Add friend") || option.equals("Remove friend") || option.equals("Remove ignore"))
 		)
 		{
 			client.createMenuEntry(-2)
@@ -164,9 +193,16 @@ public class HiscorePlugin extends Plugin
 				.setIdentifier(event.getIdentifier())
 				.onClick(e ->
 				{
-					// Determine proper endpoint from player name.
-					// TODO: look at target's world and determine if tournament/dmm endpoint should be used instead.
-					HiscoreEndpoint endpoint = findHiscoreEndpointFromPlayerName(e.getTarget());
+					final HiscoreEndpoint chatMessageEndpoint = findHiscoreEndpointFromPlayerName(e.getTarget());
+					HiscoreEndpoint endpoint = HiscoreEndpoint.fromWorldTypes(client.getWorldType());
+
+					if (chatMessageEndpoint != HiscoreEndpoint.NORMAL || endpoint == HiscoreEndpoint.SEASONAL)
+					{
+						// Determine proper endpoint from player name (eg. ironman or normal endpoint)
+						// Also assume normal hiscore endpoint for chat message w/o league icon received on league world
+						endpoint = chatMessageEndpoint;
+					}
+
 					String target = Text.removeTags(e.getTarget());
 					lookupPlayer(target, endpoint);
 				});
@@ -179,15 +215,18 @@ public class HiscorePlugin extends Plugin
 		if (event.getMenuAction() == MenuAction.RUNELITE_PLAYER && event.getMenuOption().equals(LOOKUP))
 		{
 			Player player = event.getMenuEntry().getPlayer();
-			if (player == null)
+			final String target;
+			if (player != null)
 			{
-				return;
+				target = player.getName();
 			}
+			else
+			{
+				target = playerIndexName.get(event.getId());
+			}
+			playerIndexName.clear();
 
-			String target = player.getName();
-			HiscoreEndpoint endpoint = getWorldEndpoint();
-
-			lookupPlayer(target, endpoint);
+			lookupPlayer(target, getWorldEndpoint());
 		}
 	}
 
@@ -235,7 +274,7 @@ public class HiscorePlugin extends Plugin
 			return profile;
 		}
 
-		switch (client.getVarbitValue(Varbits.ACCOUNT_TYPE))
+		switch (client.getVarbitValue(VarbitID.IRONMAN))
 		{
 			case 1:
 				return HiscoreEndpoint.IRONMAN;
@@ -263,7 +302,7 @@ public class HiscorePlugin extends Plugin
 		}
 		if (name.contains(IconID.LEAGUE.toString()))
 		{
-			return HiscoreEndpoint.LEAGUE;
+			return HiscoreEndpoint.SEASONAL;
 		}
 		return HiscoreEndpoint.NORMAL;
 	}
